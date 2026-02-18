@@ -7,7 +7,7 @@
 - All multi-byte numbers are HEX in ASCII headers
 
 ## Responses
-- `OK <message>`
+- OK <message>
 - `ERR <code> <message>`
 - `DATA <len>` followed by raw bytes
 - `ACK <seq>`
