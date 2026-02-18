@@ -16,8 +16,6 @@ I purchased a TL48 programmer but the workflow was not reliable on my macOS. Rat
 - Supports full-chip programming + verify
 - Fits the actual needs of a 6502 ROM development loop
 
-This programmer has already been used to successfully program ROMs for a working 6502 computer.
-
 ---
 
 ## System Architecture
