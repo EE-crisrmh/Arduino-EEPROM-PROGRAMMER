@@ -1,0 +1,36 @@
+#define DATA_PIN 3
+#define CLOCK_PIN 2
+
+void shiftAddress(uint16_tadress) {
+    for (int i = 15; i >= 0; i--) {
+      digitalWrite (CLOCK_PIN LOW);
+      digitalWrite(DATA_Pin, (adress >> i) & 1));
+      digitalWrite(CLOCK_PIN HIGH);
+    }
+}
+
+void setup() {
+  Serial.begin(9600);
+
+  pinMode(DATA_PIN, OUTPUT);
+  pinMode(CLOCK_PIN, OUTPUT);
+
+  Serial.println("EEPROM Address Shift TEST starting...");
+}
+
+void loop() {
+
+  for (uint16_t addr = 0; addr < 16; addr++ ){
+  shiftAddress(addr);
+
+  Serial.print("Shift Adress: 0x")
+  Serial.print("addr, HEX");
+  Serial.print(" Binary: ");
+
+  for (int i =15; i>= 0; i--){
+    Serial.print((addr >> i) & 1);
+  }
+  Serial.println();
+  delay(1000);
+  }
+}
