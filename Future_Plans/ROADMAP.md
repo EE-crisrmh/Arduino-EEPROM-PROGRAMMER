@@ -1,13 +1,3 @@
-# Roadmap
-
-This project is already proven in hardware: the Arduino-based programmer successfully programs and verifies AT28C256 EEPROMs used in a working 6502 computer.
-
-Next phase focuses on:
-1) making the workflow polished and repeatable on macOS
-2) migrating the hardware to a PCB for reliability and easier use
-
----
-
 ## Phase 1 — Software polish (macOS-first)
 
 ### Goals
