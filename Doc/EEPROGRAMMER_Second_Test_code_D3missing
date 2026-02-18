@@ -1,0 +1,289 @@
+#include <Arduino.h>
+
+/*
+Note: This was made because EEPROM I/O3 (D3 bit) is physically broken.
+This tests the Arduino EEPROM programmer prototype by writing a repeatable pattern
+and verifying it back while masking out the dead bit.
+
+The breadboard computer is now separate from this project. When the PCB is built,
+the EEPROM will be replaced.
+*/
+
+// Shift registers (74HC164 x2) for address
+#define SR_CLK   2
+#define SR_DATA  3
+
+// EEPROM control
+#define EEPROM_WE 12
+
+// EEPROM data bus: D0..D7 -> Arduino D4..D11
+const uint8_t DATA_PINS[8] = {4,5,6,7,8,9,10,11};
+
+// Dead EEPROM bit: I/O3 = bit 3
+const uint8_t DEAD_MASK = 0x08;
+
+// EEPROM size (A0..A14) = 32K
+const uint16_t EEPROM_SIZE = 0x8000;
+
+static inline void pulseClock() {
+  digitalWrite(SR_CLK, HIGH);
+  digitalWrite(SR_CLK, LOW);
+}
+
+static inline void shiftBit(uint8_t b) {
+  digitalWrite(SR_DATA, b ? HIGH : LOW);
+  pulseClock();
+}
+
+static void setAddress(uint16_t addr) {
+  uint8_t low  = addr & 0xFF;
+  uint8_t high = (addr >> 8) & 0x7F;
+
+  for (int i = 0; i < 8; i++) shiftBit((low  >> i) & 1);  // A0..A7
+  for (int i = 0; i < 7; i++) shiftBit((high >> i) & 1);  // A8..A14
+  shiftBit(0);                                            // unused Q7
+}
+
+static void dataPinsInput() {
+  for (int i = 0; i < 8; i++) pinMode(DATA_PINS[i], INPUT);
+}
+
+static void dataPinsOutput() {
+  for (int i = 0; i < 8; i++) pinMode(DATA_PINS[i], OUTPUT);
+}
+
+static void writeDataBus(uint8_t data) {
+  for (int i = 0; i < 8; i++) {
+    digitalWrite(DATA_PINS[i], (data >> i) & 1);
+  }
+}
+
+static uint8_t readDataBus() {
+  uint8_t v = 0;
+  for (int i = 0; i < 8; i++) {
+    if (digitalRead(DATA_PINS[i])) v |= (1 << i);
+  }
+  return v;
+}
+
+static void eepromWriteByte(uint16_t addr, uint8_t data) {
+  data &= ~DEAD_MASK;
+
+  setAddress(addr);
+
+  dataPinsOutput();
+  writeDataBus(data);
+
+  digitalWrite(EEPROM_WE, LOW);
+  delayMicroseconds(1);
+  digitalWrite(EEPROM_WE, HIGH);
+  delayMicroseconds(1);
+
+
+  dataPinsInput();
+  delay(10);
+}
+
+static uint8_t eepromReadByte(uint16_t addr) {
+  setAddress(addr);
+  dataPinsInput();
+  delayMicroseconds(5);
+  return readDataBus();
+}
+
+static uint8_t patternFor(uint16_t addr) {
+  uint8_t p = (uint8_t)((addr ^ (addr >> 8)) & 0xFF);
+  return p & ~DEAD_MASK;
+}
+
+static bool spotTest() {
+  const uint16_t addrs[] = {0x0000,0x0001,0x0002,0x00FF,0x0100,0x01FF,0x1234,0x7FFE,0x7FFF};
+  for (uint8_t i = 0; i < sizeof(addrs)/sizeof(addrs[0]); i++) {
+    uint16_t a = addrs[i];
+    uint8_t w = patternFor(a);
+    eepromWriteByte(a, w);
+    uint8_t r = eepromReadByte(a) & ~DEAD_MASK;
+    if (r != w) {
+      Serial.print("I fail spot addr=");
+      Serial.print(a, HEX);
+      Serial.print(" exp=");
+      Serial.print(w, HEX);
+      Serial.print(" got=");
+      Serial.println(r, HEX);
+      return false;
+    }
+  }
+  return true;
+}
+
+static void fullTest() {
+  Serial.println("I start spot test");
+  if (!spotTest()) {
+    Serial.println("I stop because spot test failed");
+    return;
+  }
+
+  Serial.println("I write full chip");
+  for (uint16_t a = 0; a < EEPROM_SIZE; a++) {
+    eepromWriteByte(a, patternFor(a));
+  }
+
+  Serial.println("I verify");
+  uint16_t errors = 0;
+  for (uint16_t a = 0; a < EEPROM_SIZE; a++) {
+    uint8_t exp = patternFor(a);
+    uint8_t got = eepromReadByte(a) & ~DEAD_MASK;
+    if (got != exp) {
+      Serial.print("I FAIL addr=");
+      Serial.print(a, HEX);
+      Serial.print(" exp=");
+      Serial.print(exp, HEX);
+      Serial.print(" got=");
+      Serial.println(got, HEX);
+      errors++;
+      if (errors >= 32) break;
+    }
+  }
+
+  if (errors == 0) Serial.println("I PASS");
+  else {
+    Serial.print("I finish with errors=");
+    Serial.println(errors);
+  }
+}
+
+static int hexVal(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+  if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+  return -1;
+}
+
+static bool parseHexWord(const char* s, uint16_t &out) {
+  out = 0;
+  for (int i = 0; i < 4; i++) {
+    int v = hexVal(s[i]);
+    if (v < 0) return false;
+    out = (out << 4) | (uint16_t)v;
+  }
+  return true;
+}
+
+static bool parseHexByte(const char* s, uint8_t &out) {
+  int v1 = hexVal(s[0]);
+  int v2 = hexVal(s[1]);
+  if (v1 < 0 || v2 < 0) return false;
+  out = (uint8_t)((v1 << 4) | v2);
+  return true;
+}
+
+static void printHex2(uint8_t v) {
+  if (v < 0x10) Serial.print('0');
+  Serial.print(v, HEX);
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(SR_CLK, OUTPUT);
+  pinMode(SR_DATA, OUTPUT);
+  digitalWrite(SR_CLK, LOW);
+  digitalWrite(SR_DATA, LOW);
+
+  pinMode(EEPROM_WE, OUTPUT);
+  digitalWrite(EEPROM_WE, HIGH);
+
+  dataPinsInput();
+
+  Serial.println("I am ready");
+  Serial.println("Commands: R AAAA | W AAAA DD | T");
+}
+
+String rx = "";
+
+void handleLine(String line) {
+  line.trim();
+  Serial.print("RX: ["); Serial.print(line); Serial.println("]");
+
+  if (line.length() == 0) return;
+  line.toUpperCase();
+
+  int i = 0;
+  bool didAnything = false;
+
+  while (i < line.length()) {
+    int rPos = line.indexOf("R ", i);
+    int wPos = line.indexOf("W ", i);
+
+    int pos = -1;
+    char cmd = 0;
+
+    if (rPos >= 0 && (wPos < 0 || rPos < wPos)) { pos = rPos; cmd = 'R'; }
+    else if (wPos >= 0) { pos = wPos; cmd = 'W'; }
+    else break;
+
+    int nextR = line.indexOf("R ", pos + 2);
+    int nextW = line.indexOf("W ", pos + 2);
+
+    int next = -1;
+    if (nextR >= 0 && (nextW < 0 || nextR < nextW)) next = nextR;
+    else if (nextW >= 0) next = nextW;
+    else next = line.length();
+
+    String chunk = line.substring(pos, next);
+    chunk.trim();
+
+    if (cmd == 'R') {
+      // Accept: "R AAAA" (extra junk after AAAA is ignored by strtoul)
+      if (chunk.length() >= 3) {
+        const char* p = chunk.c_str() + 2;
+        while (*p == ' ') p++;
+        if (*p) {
+          uint16_t addr = (uint16_t) strtoul(p, nullptr, 16);
+          uint8_t v = eepromReadByte(addr) & ~DEAD_MASK;
+          printHex2(v);
+          Serial.println();
+          didAnything = true;
+        }
+      }
+    } else {
+      // Accept: "W AAAA DD" with variable spacing
+      int sp1 = chunk.indexOf(' ');
+      if (sp1 >= 0) {
+        int sp2 = chunk.indexOf(' ', sp1 + 1);
+        if (sp2 >= 0) {
+          String aStr = chunk.substring(sp1 + 1, sp2);
+          String dStr = chunk.substring(sp2 + 1);
+          aStr.trim(); dStr.trim();
+
+          if (aStr.length() > 0 && dStr.length() > 0) {
+            uint16_t addr = (uint16_t) strtoul(aStr.c_str(), nullptr, 16);
+            uint8_t data  = (uint8_t)  strtoul(dStr.c_str(), nullptr, 16);
+            eepromWriteByte(addr, data);
+            Serial.println("I ok");
+            didAnything = true;
+          }
+        }
+      }
+    }
+
+    i = next;
+  }
+
+  if (!didAnything) Serial.println("I err");
+}
+
+void loop() {
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\r') continue;
+
+    if (c == '\n') {
+      handleLine(rx);
+      rx = "";
+    } else {
+      rx += c;
+      if (rx.length() > 200) rx = "";  // prevent errors from copy pasting from github or google docs. 
+    }
+  }
+}
