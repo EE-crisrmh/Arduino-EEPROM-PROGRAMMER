@@ -54,7 +54,7 @@ The host tool is responsible for:
 
 ---
 
-## Host Tool: How a software developer can contribute: 
+## Host Tool: How a Software Developer can contribute: (More in Future Plans folder) 
 
 The goal is a small CLI tool that feels like:
 
