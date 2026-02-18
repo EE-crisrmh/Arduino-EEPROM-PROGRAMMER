@@ -7,7 +7,7 @@
 - All multi-byte numbers are HEX in ASCII headers
 
 ## Responses
-- 'OK <message>'
+- `OK <message>`
 - `ERR <code> <message>`
 - `DATA <len>` followed by raw bytes
 - `ACK <seq>`
@@ -45,5 +45,6 @@ Device:
 - Chunk size default: 256 bytes
 - Host should retry NAK/timeouts up to N times, then fail
 - Firmware must reject out-of-range addr/len
+
 
 
