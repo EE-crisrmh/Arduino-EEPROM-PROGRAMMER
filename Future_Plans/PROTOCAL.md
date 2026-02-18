@@ -45,3 +45,4 @@ Device:
 - Chunk size default: 256 bytes
 - Host should retry NAK/timeouts up to N times, then fail
 - Firmware must reject out-of-range addr/len
+
