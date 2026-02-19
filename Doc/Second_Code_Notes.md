@@ -167,9 +167,9 @@ The system may be writing, but not correctly / not deterministically.
 
 ---
 
-# What I need to fix (for reliability)
+# What I need to fix
 
-## Electrical / architecture fixes (highest priority)
+## Electrical (highest priority)
 1) **Control OE (and ideally CE) from the Arduino**
    - Right now my control pin strategy can cause the EEPROM to drive the data bus while the Arduino is also driving it during writes.
    - That can cause bus contention and inconsistent programming/readback.
@@ -192,12 +192,12 @@ The system may be writing, but not correctly / not deterministically.
    - Track which bits mismatch most often to identify wiring errors vs contention.
 
 ## Tooling/process fixes
-1) **Stop using Arduino IDE Serial Monitor as a batch sender**
+1) **Stop using Arduino IDE Serial Monitor as a batch sender as soon as stable commands are supported**
    - It merges/drops pasted lines.
-   - I should use a real serial terminal or a Python script once the firmware supports stable commands.
+   - Switch to a serial terminal or a Python script.
 
 2) **Build a dedicated automated tester**
-   - Once the hardware control pins are correct, I should automate:
+   - Once the hardware control pins are correct, Software team should automate:
      - walking-1 / walking-0 test
      - checkerboard patterns
      - random pattern test with seeded PRNG
