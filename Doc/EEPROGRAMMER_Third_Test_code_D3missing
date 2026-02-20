@@ -1,0 +1,388 @@
+#include <Arduino.h>
+
+/*
+EEPROM Programmer Prototype (updated wiring + contention fix)
+
+Goals for today:
+- Write acknowledgements exist
+- Prove whether write + verify becomes reliable after adding /OE + /CE control
+- If still inconsistent after this, it's address shifting/latch/timing or wiring.
+
+Hardware:
+- Address via 74HC164 x2 shift registers (no latch; address is whatever was last shifted)
+- EEPROM control: /WE, /CE, /OE
+- Data bus: remapped so Arduino has free pins for /OE and /CE
+- EEPROM I/O3 (bit 3) is physically broken -> mask bit 3 on read/write/compare
+
+IMPORTANT:
+- "Masking" is NOT enough if the dead pin is still electrically loading the bus.
+- So we also completely STOP reading/driving the Arduino pin for that bit.
+*/
+
+// Shift registers (74HC164 x2) for address A0..A14
+#define SR_CLK   2
+#define SR_DATA  3
+
+// EEPROM control pins (ACTIVE LOW)
+#define EEPROM_WE 12   // /WE
+#define EEPROM_CE 5    // /CE
+#define EEPROM_OE 6    // /OE
+
+// EEPROM data bus pins in EEPROM bit order D0..D7
+// changed: EEPROM D0..D2 -> Arduino A0..A2
+// NOTE: D3 is dead (bit 3). There is NO Arduino pin for it anymore.
+// We only store the 7 real pins for bits: 0,1,2,4,5,6,7
+const uint8_t DATA_PINS_NO_D3[7] = {A0, A1, A2, 8, 9, 10, 11};
+
+// Dead EEPROM bit: I/O3 = bit 3
+const uint8_t DEAD_MASK = 0x08;
+const uint8_t DEAD_BIT_INDEX = 3;                 // D3 bit position
+
+// EEPROM size (A0..A14) = 32K
+const uint16_t EEPROM_SIZE = 0x8000;
+
+// Address shifting helpers
+static inline void pulseClock() {
+digitalWrite(SR_CLK, HIGH);
+digitalWrite(SR_CLK, LOW);
+}
+
+static inline void shiftBit(uint8_t b) {
+digitalWrite(SR_DATA, b ? HIGH : LOW);
+pulseClock();
+}
+
+/*
+setAddress():
+- Shifts out A0..A7 then A8..A14, LSB-first for each byte
+- No latch: address remains whatever last 16 bits you shifted in
+*/
+static void setAddress(uint16_t addr) {
+uint8_t low  = addr & 0xFF;
+uint8_t high = (addr >> 8) & 0x7F;
+
+// A0..A7
+for (int i = 0; i < 8; i++) shiftBit((low  >> i) & 1);
+// A8..A14
+for (int i = 0; i < 7; i++) shiftBit((high >> i) & 1);
+// unused Q7
+shiftBit(0);
+}
+
+// Data Bus direction + I/O
+static void dataPinsInput() {
+for (int i = 0; i < 7; i++) {
+  pinMode(DATA_PINS_NO_D3[i], INPUT);
+}
+}
+
+static void dataPinsOutput() {
+for (int i = 0; i < 7; i++) {
+  pinMode(DATA_PINS_NO_D3[i], OUTPUT);
+}
+}
+
+static void writeDataBus(uint8_t data) {
+// Force dead bit low in the value we "intend" to write
+data &= ~DEAD_MASK;
+// bits 0,1,2 -> A0,A1,A2
+digitalWrite(DATA_PINS_NO_D3[0], (data >> 0) & 1);
+digitalWrite(DATA_PINS_NO_D3[1], (data >> 1) & 1);
+digitalWrite(DATA_PINS_NO_D3[2], (data >> 2) & 1);
+// bit 3 is dead and skipped
+// bits 4,5,6,7 -> D8,D9,D10,D11
+digitalWrite(DATA_PINS_NO_D3[3], (data >> 4) & 1);
+digitalWrite(DATA_PINS_NO_D3[4], (data >> 5) & 1);
+digitalWrite(DATA_PINS_NO_D3[5], (data >> 6) & 1);
+digitalWrite(DATA_PINS_NO_D3[6], (data >> 7) & 1);
+}
+
+static uint8_t readDataBus() {
+uint8_t v = 0;
+if (digitalRead(DATA_PINS_NO_D3[0])) v |= (1 << 0);
+if (digitalRead(DATA_PINS_NO_D3[1])) v |= (1 << 1);
+if (digitalRead(DATA_PINS_NO_D3[2])) v |= (1 << 2);
+// bit 3 forced 0
+if (digitalRead(DATA_PINS_NO_D3[3])) v |= (1 << 4);
+if (digitalRead(DATA_PINS_NO_D3[4])) v |= (1 << 5);
+if (digitalRead(DATA_PINS_NO_D3[5])) v |= (1 << 6);
+if (digitalRead(DATA_PINS_NO_D3[6])) v |= (1 << 7);
+v &= ~DEAD_MASK;
+return v;
+}
+
+// Control helpers (ACTIVE LOW)
+static inline void eepromDisableAll() {
+// Safe idle: chip disabled, output disabled, not writing
+digitalWrite(EEPROM_CE, HIGH);
+digitalWrite(EEPROM_OE, HIGH);
+digitalWrite(EEPROM_WE, HIGH);
+}
+
+static inline void eepromBeginRead() {
+// Read mode: Arduino releases bus, EEPROM drives it
+dataPinsInput();
+digitalWrite(EEPROM_WE, HIGH);
+digitalWrite(EEPROM_CE, LOW);
+digitalWrite(EEPROM_OE, LOW);
+}
+
+static inline void eepromEndRead() {
+digitalWrite(EEPROM_OE, HIGH);
+digitalWrite(EEPROM_CE, HIGH);
+}
+
+static inline void eepromBeginWrite() {
+// Write mode: Arduino drives bus, EEPROM must NOT drive it
+digitalWrite(EEPROM_OE, HIGH);   // kill EEPROM output FIRST (prevents contention)
+dataPinsOutput();
+digitalWrite(EEPROM_CE, LOW);
+}
+
+static inline void eepromEndWrite() {
+digitalWrite(EEPROM_CE, HIGH);
+dataPinsInput();                 // optional safety
+}
+
+// EEPROM ops
+static void eepromWriteByte(uint16_t addr, uint8_t data) {
+// Never attempt to write the dead bit
+data &= ~DEAD_MASK;
+setAddress(addr);
+eepromBeginWrite();
+writeDataBus(data);
+
+// setup time cushion
+delayMicroseconds(2);
+
+// /WE pulse (safe, not borderline)
+digitalWrite(EEPROM_WE, LOW);
+delayMicroseconds(6);
+digitalWrite(EEPROM_WE, HIGH);
+// hold time cushion
+delayMicroseconds(2);
+eepromEndWrite();
+// EEPROM internal write cycle time.
+delay(10);
+}
+static uint8_t eepromReadByte(uint16_t addr) {
+setAddress(addr);
+eepromBeginRead();
+delayMicroseconds(2);          // access time cushion
+uint8_t v = readDataBus();
+eepromEndRead();
+return v;
+}
+
+// Patterns + tests
+static uint8_t patternFor(uint16_t addr) {
+uint8_t p = (uint8_t)((addr ^ (addr >> 8)) & 0xFF);
+return p & ~DEAD_MASK;
+}
+
+static void printHex2(uint8_t v) {
+if (v < 0x10) Serial.print('0');
+Serial.print(v, HEX);
+}
+
+static void printBits(uint8_t v) {
+for (int b = 7; b >= 0; b--) Serial.print((v >> b) & 1);
+}
+
+static bool spotTest() {
+const uint16_t addrs[] = {0x0000,0x0001,0x0002,0x00FF,0x0100,0x01FF,0x1234,0x7FFE,0x7FFF};
+for (uint8_t i = 0; i < sizeof(addrs)/sizeof(addrs[0]); i++) {
+  uint16_t a = addrs[i];
+  uint8_t w = patternFor(a);
+
+  eepromWriteByte(a, w);
+
+  uint8_t rRaw = eepromReadByte(a);
+  uint8_t r = rRaw & ~DEAD_MASK;
+
+if (r != w) {
+    uint8_t x = (uint8_t)((r ^ w) & ~DEAD_MASK);
+    Serial.print("I fail spot addr=");
+    Serial.print(a, HEX);
+    Serial.print(" exp=");
+    printHex2(w);
+    Serial.print(" got=");
+    printHex2(r);
+    Serial.print(" xor=");
+    printHex2(x);
+    Serial.print(" bits(xor)=");
+    printBits(x);
+    Serial.println();
+    return false;
+  }
+}
+return true;
+}
+
+static void fullTest() {
+Serial.println("I start spot test");
+if (!spotTest()) {
+  Serial.println("I stop because spot test failed");
+  return;
+}
+
+Serial.println("I write full chip");
+for (uint16_t a = 0; a < EEPROM_SIZE; a++) {
+  eepromWriteByte(a, patternFor(a));
+}
+
+Serial.println("I verify");
+uint16_t errors = 0;
+
+// Track which bits fail most often (excluding dead bit)
+uint16_t bitFailCount[8] = {0,0,0,0,0,0,0,0};
+
+for (uint16_t a = 0; a < EEPROM_SIZE; a++) {
+  uint8_t exp = patternFor(a);
+  uint8_t got = eepromReadByte(a) & ~DEAD_MASK;
+
+  if (got != exp) {
+    uint8_t x = (uint8_t)((got ^ exp) & ~DEAD_MASK);
+    for (int b = 0; b < 8; b++) {
+      if (b == DEAD_BIT_INDEX) continue;
+      if (x & (1 << b)) bitFailCount[b]++;
+    }
+
+    Serial.print("I FAIL addr=");
+    Serial.print(a, HEX);
+    Serial.print(" exp=");
+    printHex2(exp);
+    Serial.print(" got=");
+    printHex2(got);
+    Serial.print(" xor=");
+    printHex2(x);
+    Serial.println();
+    errors++;
+    if (errors >= 32) break;
+  }
+}
+
+
+if (errors == 0) {
+  Serial.println("I PASS");
+} else {
+  Serial.print("I finish with errors=");
+  Serial.println(errors);
+
+  Serial.print("I bit fail counts (0..7, skip 3): ");
+  for (int b = 0; b < 8; b++) {
+    if (b == DEAD_BIT_INDEX) continue;
+    Serial.print("b"); Serial.print(b); Serial.print("=");
+    Serial.print(bitFailCount[b]);
+    Serial.print(" ");
+  }
+  Serial.println();
+}
+}
+
+
+// Serial command handling (same style as before)
+String rx = "";
+
+
+void handleLine(String line) {
+line.trim();
+Serial.print("RX: ["); Serial.print(line); Serial.println("]");
+
+
+if (line.length() == 0) return;
+line.toUpperCase();
+
+
+// Commands:
+//  T         -> run fullTest()
+//  R AAAA    -> read byte at address
+//  W AAAA DD -> write byte then ack
+
+
+if (line == "T") {
+  fullTest();
+  return;
+}
+
+
+if (line.startsWith("R ")) {
+  const char* p = line.c_str() + 2;
+  while (*p == ' ') p++;
+  if (*p) {
+    uint16_t addr = (uint16_t) strtoul(p, nullptr, 16);
+    uint8_t v = eepromReadByte(addr) & ~DEAD_MASK;
+    printHex2(v);
+    Serial.println();
+    return;
+  }
+}
+
+
+if (line.startsWith("W ")) {
+  // Accept: "W AAAA DD"
+  int sp1 = line.indexOf(' ');
+  int sp2 = line.indexOf(' ', sp1 + 1);
+  if (sp2 >= 0) {
+    String aStr = line.substring(sp1 + 1, sp2);
+    String dStr = line.substring(sp2 + 1);
+    aStr.trim(); dStr.trim();
+
+
+    if (aStr.length() > 0 && dStr.length() > 0) {
+      uint16_t addr = (uint16_t) strtoul(aStr.c_str(), nullptr, 16);
+      uint8_t data  = (uint8_t)  strtoul(dStr.c_str(), nullptr, 16);
+      eepromWriteByte(addr, data);
+      Serial.println("I ok");
+      return;
+    }
+  }
+}
+
+
+Serial.println("I err");
+}
+
+
+void setup() {
+Serial.begin(115200);
+
+
+pinMode(SR_CLK, OUTPUT);
+pinMode(SR_DATA, OUTPUT);
+digitalWrite(SR_CLK, LOW);
+digitalWrite(SR_DATA, LOW);
+
+
+pinMode(EEPROM_WE, OUTPUT);
+pinMode(EEPROM_CE, OUTPUT);
+pinMode(EEPROM_OE, OUTPUT);
+
+eepromDisableAll();
+dataPinsInput();
+
+
+Serial.println("I am ready");
+Serial.println("Commands: R AAAA | W AAAA DD | T");
+}
+
+void loop() {
+while (Serial.available()) {
+  char c = (char)Serial.read();
+  if (c == '\r') continue;
+
+
+  if (c == '\n') {
+    handleLine(rx);
+    rx = "";
+  } else {
+    rx += c;
+    if (rx.length() > 200) rx = "";  // in case someone's copy and paste test input from github.
+  }
+}
+}
+
+
+
+
+
