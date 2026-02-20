@@ -1,14 +1,17 @@
-# Tests I ran (work log)
+# Notes — EEPROM Programmer Prototype Debug Log
 
-## Context
-A key complication is that EEPROM I/O3 (data bit 3) is physically broken on my current chip. Because of that, I mask out bit 3 (0x08) during comparisons. This lets me validate the other 7 bits even with the damaged pin.
+## Date
+2026-02-18
 
-My goal for these tests was to confirm:
+## Goal of today
 1) Address shifting works (the EEPROM address changes when I shift different bits)
 2) Data bus mapping is correct (D0–D7 are actually the bits I think they are)
 3) Writes actually program the EEPROM (not just “I sent a write command”)
 4) Reads are stable and repeatable
 5) The test interface works reliably (serial commands / batch commands)
+
+## Context
+A key complication is that EEPROM I/O3 (data bit 3) is physically broken on my current chip. Because of that, I mask out bit 3 (0x08) during comparisons. This lets me validate the other 7 bits even with the damaged pin.
 
 ---
 
