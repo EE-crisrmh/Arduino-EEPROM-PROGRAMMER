@@ -1,0 +1,99 @@
+#include <Arduino.h>
+
+#define SR_CLK 2
+#define SR_DATA 3
+
+#define EEPROM_WE 12
+#define EEPROM_CE 5
+#define EEPROM_OE 6
+
+/*
+This code was made to test shift register logic and see if they were actually changing the adresss lines or not
+*/
+
+// D0,D1,D2,D4,D5,D6,D7
+const uint8_t DATA_PINS_NO_D3[7] = {A0, A1, A2, 8, 9, 10, 11};
+
+static inline void pulseClock() {
+  digitalWrite(SR_CLK, HIGH);
+  digitalWrite(SR_CLK, LOW);
+}
+
+static inline void shiftBit(uint8_t b) {
+  digitalWrite(SR_DATA, b ? HIGH : LOW);
+  pulseClock();
+}
+
+static void setAddress(uint16_t addr) {
+  uint8_t low  = addr & 0xFF;
+  uint8_t high = (addr >> 8) & 0x7F;
+
+  for (int i = 0; i < 8; i++) shiftBit((low  >> i) & 1);
+  for (int i = 0; i < 7; i++) shiftBit((high >> i) & 1);
+  shiftBit(0);
+}
+
+static void dataPinsInput() {
+  for (int i = 0; i < 7; i++) pinMode(DATA_PINS_NO_D3[i], INPUT);
+}
+
+static uint8_t readDataBus() {
+  uint8_t v = 0;
+  if (digitalRead(DATA_PINS_NO_D3[0])) v |= (1 << 0);
+  if (digitalRead(DATA_PINS_NO_D3[1])) v |= (1 << 1);
+  if (digitalRead(DATA_PINS_NO_D3[2])) v |= (1 << 2);
+  if (digitalRead(DATA_PINS_NO_D3[3])) v |= (1 << 4);
+  if (digitalRead(DATA_PINS_NO_D3[4])) v |= (1 << 5);
+  if (digitalRead(DATA_PINS_NO_D3[5])) v |= (1 << 6);
+  if (digitalRead(DATA_PINS_NO_D3[6])) v |= (1 << 7);
+  v &= ~0x08; // dead bit forced 0
+  return v;
+}
+
+static uint8_t readAt(uint16_t a) {
+  setAddress(a);
+  dataPinsInput();
+  digitalWrite(EEPROM_WE, HIGH);
+  digitalWrite(EEPROM_CE, LOW);
+  digitalWrite(EEPROM_OE, LOW);
+  delayMicroseconds(5);
+  uint8_t v = readDataBus();
+  digitalWrite(EEPROM_OE, HIGH);
+  digitalWrite(EEPROM_CE, HIGH);
+  return v;
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(SR_CLK, OUTPUT);
+  pinMode(SR_DATA, OUTPUT);
+  digitalWrite(SR_CLK, LOW);
+  digitalWrite(SR_DATA, LOW);
+
+  pinMode(EEPROM_WE, OUTPUT);
+  pinMode(EEPROM_CE, OUTPUT);
+  pinMode(EEPROM_OE, OUTPUT);
+
+  digitalWrite(EEPROM_WE, HIGH);
+  digitalWrite(EEPROM_CE, HIGH);
+  digitalWrite(EEPROM_OE, HIGH);
+
+  Serial.println("Addr toggle test: reading 0000 vs 1234");
+}
+
+void loop() {
+  uint8_t v0 = readAt(0x0000);
+  uint8_t v1 = readAt(0x1234);
+
+  Serial.print("0000=");
+  if (v0 < 0x10) Serial.print('0');
+  Serial.print(v0, HEX);
+
+  Serial.print("  1234=");
+  if (v1 < 0x10) Serial.print('0');
+  Serial.println(v1, HEX);
+
+  delay(300);
+}
+
