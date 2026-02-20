@@ -1,0 +1,46 @@
+#include <Arduino.h>
+/*
+-This code was made to allow us to prove that Q7 of U3 is wired correctly
+-U3 is actually receiving data
+-Both IC's share the same clock
+-Both /MR pins are sane
+-Timing is good enough for the chain
+LED turns on for 0.7 s and turns off for 0.7 s as expected. 
+*/
+
+#define SR_CLK  2
+#define SR_DATA 3
+
+static inline void pulseClock() {
+  digitalWrite(SR_CLK, HIGH);
+  delayMicroseconds(50);
+  digitalWrite(SR_CLK, LOW);
+  delayMicroseconds(50);
+}
+
+void shift16(uint8_t bitVal) {
+  digitalWrite(SR_DATA, bitVal);
+
+  for (int i = 0; i < 16; i++) {
+    pulseClock();
+  }
+}
+
+void setup() {
+  pinMode(SR_CLK, OUTPUT);
+  pinMode(SR_DATA, OUTPUT);
+
+  digitalWrite(SR_CLK, LOW);
+  digitalWrite(SR_DATA, LOW);
+}
+
+void loop() {
+
+  // Fill both registers with 1s
+  shift16(HIGH);
+  delay(700);
+
+  // Fill both registers with 0s
+  shift16(LOW);
+  delay(700);
+}
