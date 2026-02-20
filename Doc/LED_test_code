@@ -1,0 +1,36 @@
+#include <Arduino.h>
+/*
+This code was made to prove that U2, clock line (D2), data line (D3), and /MR wiring are all wired correctly on the protoype. 
+LED should turn on for 0.5 s and turn off for 0.5 s
+Results: suscessful. 
+
+*/
+
+#define SR_CLK 2
+#define SR_DATA 3
+
+static inline void pulse() {
+  digitalWrite(SR_CLK, HIGH);
+  delayMicroseconds(50);
+  digitalWrite(SR_CLK, LOW);
+  delayMicroseconds(50);
+}
+
+void setup() {
+  pinMode(SR_CLK, OUTPUT);
+  pinMode(SR_DATA, OUTPUT);
+  digitalWrite(SR_CLK, LOW);
+  digitalWrite(SR_DATA, LOW);
+}
+
+void loop() {
+  // shift 8 ones -> Q0 should go high and stay high after the first pulse
+  digitalWrite(SR_DATA, HIGH);
+  for (int i = 0; i < 8; i++) pulse();
+  delay(500);
+
+  // shift 8 zeros -> Q0 should go low and stay low after the first pulse
+  digitalWrite(SR_DATA, LOW);
+  for (int i = 0; i < 8; i++) pulse();
+  delay(500);
+}
