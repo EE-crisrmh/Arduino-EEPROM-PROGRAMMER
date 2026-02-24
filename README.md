@@ -1,4 +1,4 @@
-# Arduino AT28C256 EEPROM Programmer (macOS-friendly)
+# AT28C256 EEPROM Programmer (macOS-friendly)
 
 A standalone EEPROM programmer built to support rapid ROM iteration for a 6502 computer without relying on Windows-only tooling.  
 This project uses an **Arduino nano** and **2x shift registers** to drive the EEPROM address bus, perform **parallel byte writes**, and run **read-back verification** to ensure data integrity.
